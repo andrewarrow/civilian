@@ -20,9 +20,9 @@
   "action": {
     "default_popup": "popup.html",
     "default_title": "civilian",
-    "default_icon": "cli.jpg"
+    "default_icon": "cli.png"
   },
   "icons": {
-    "48": "cli.jpg"
+    "48": "cli.png"
   }
 }
