@@ -137,8 +137,12 @@ function findSubredditContext(element) {
   return 'N/A';
 }
 
-function extractJiraIssues() {
+async function extractJiraIssues() {
   console.log('[Newsance Jira] Starting Jira issue extraction...');
+  
+  // First, try to load all issues by scrolling to trigger virtual scrolling
+  await scrollToLoadAllIssues();
+  
   const issues = [];
   
   // Find all issue cards by their unique ID pattern
@@ -241,6 +245,51 @@ function extractJiraIssues() {
   return issues;
 }
 
+async function scrollToLoadAllIssues() {
+  console.log('[Newsance Jira] Attempting to load all issues via scrolling...');
+  
+  // Find the board container for scrolling
+  const boardContainer = document.querySelector('[data-testid="software-board.board-container.board"]');
+  if (!boardContainer) {
+    console.log('[Newsance Jira] Board container not found');
+    return;
+  }
+  
+  let previousCardCount = 0;
+  let currentCardCount = 0;
+  let attempts = 0;
+  const maxAttempts = 10;
+  
+  while (attempts < maxAttempts) {
+    // Count current cards
+    currentCardCount = document.querySelectorAll('[id^="card-BIP-"]').length;
+    console.log(`[Newsance Jira] Attempt ${attempts + 1}: Found ${currentCardCount} cards`);
+    
+    // If no new cards loaded, break
+    if (currentCardCount === previousCardCount && attempts > 0) {
+      console.log('[Newsance Jira] No new cards found, stopping scroll');
+      break;
+    }
+    
+    previousCardCount = currentCardCount;
+    
+    // Try scrolling horizontally across the board to load all columns
+    boardContainer.scrollBy(500, 0);
+    
+    // Also try scrolling down in each column's virtual list
+    const virtualLists = document.querySelectorAll('[data-testid="software-board.board-container.board.virtual-board.fast-virtual-list.fast-virtual-list-wrapper"]');
+    virtualLists.forEach(list => {
+      list.scrollBy(0, 500);
+    });
+    
+    // Wait for content to load
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    attempts++;
+  }
+  
+  console.log(`[Newsance Jira] Finished scrolling. Final count: ${document.querySelectorAll('[id^="card-BIP-"]').length} cards`);
+}
+
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'GET_USERNAMES') {
@@ -258,8 +307,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.type === 'GET_JIRA_ISSUES') {
     const site = detectSite();
     if (site === 'jira') {
-      const data = extractJiraIssues();
-      sendResponse({ issues: data });
+      // Handle async function
+      extractJiraIssues().then(data => {
+        sendResponse({ issues: data });
+      }).catch(error => {
+        console.error('[Newsance Jira] Error extracting issues:', error);
+        sendResponse({ issues: [] });
+      });
     } else {
       sendResponse({ issues: [] });
     }
