@@ -248,46 +248,104 @@ async function extractJiraIssues() {
 async function scrollToLoadAllIssues() {
   console.log('[Newsance Jira] Attempting to load all issues via scrolling...');
   
-  // Find the board container for scrolling
-  const boardContainer = document.querySelector('[data-testid="software-board.board-container.board"]');
-  if (!boardContainer) {
-    console.log('[Newsance Jira] Board container not found');
-    return;
-  }
-  
   let previousCardCount = 0;
   let currentCardCount = 0;
   let attempts = 0;
-  const maxAttempts = 10;
+  const maxAttempts = 25; // Increased attempts
+  let stableCount = 0; // Track how many times count stayed the same
   
-  while (attempts < maxAttempts) {
+  while (attempts < maxAttempts && stableCount < 5) {
     // Count current cards
     currentCardCount = document.querySelectorAll('[id^="card-BIP-"]').length;
     console.log(`[Newsance Jira] Attempt ${attempts + 1}: Found ${currentCardCount} cards`);
     
-    // If no new cards loaded, break
-    if (currentCardCount === previousCardCount && attempts > 0) {
-      console.log('[Newsance Jira] No new cards found, stopping scroll');
-      break;
+    // If no new cards loaded, increment stable count
+    if (currentCardCount === previousCardCount) {
+      stableCount++;
+      console.log(`[Newsance Jira] Card count stable (${stableCount}/5)`);
+    } else {
+      stableCount = 0; // Reset stable count if new cards found
     }
     
     previousCardCount = currentCardCount;
     
-    // Try scrolling horizontally across the board to load all columns
-    boardContainer.scrollBy(500, 0);
+    // More aggressive scrolling strategy
     
-    // Also try scrolling down in each column's virtual list
+    // 1. Scroll the main window
+    window.scrollBy(0, 1000);
+    window.scrollBy(1000, 0);
+    
+    // 2. Find and scroll board container
+    const boardContainer = document.querySelector('[data-testid="software-board.board-container.board"]');
+    if (boardContainer) {
+      boardContainer.scrollBy(1000, 0);
+      boardContainer.scrollBy(0, 1000);
+      // Try scrolling to specific positions
+      boardContainer.scrollTo(0, boardContainer.scrollHeight);
+      boardContainer.scrollTo(boardContainer.scrollWidth, 0);
+    }
+    
+    // 3. Find all virtual list wrappers and scroll them extensively
     const virtualLists = document.querySelectorAll('[data-testid="software-board.board-container.board.virtual-board.fast-virtual-list.fast-virtual-list-wrapper"]');
-    virtualLists.forEach(list => {
-      list.scrollBy(0, 500);
+    virtualLists.forEach((list, index) => {
+      console.log(`[Newsance Jira] Scrolling virtual list ${index + 1}, height: ${list.scrollHeight}`);
+      // Scroll to bottom
+      list.scrollTo(0, list.scrollHeight);
+      // Scroll step by step
+      for (let i = 0; i < 10; i++) {
+        list.scrollBy(0, 200);
+      }
     });
     
-    // Wait for content to load
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // 4. Find all scrollable containers and scroll them
+    const allScrollables = [
+      ...document.querySelectorAll('[data-testid*="virtual"]'),
+      ...document.querySelectorAll('[class*="virtual"]'),
+      ...document.querySelectorAll('ul[style*="min-height"]'),
+      ...document.querySelectorAll('[style*="overflow-y"]'),
+      ...document.querySelectorAll('[data-component-selector*="column"]')
+    ];
+    
+    allScrollables.forEach((container, index) => {
+      if (container && typeof container.scrollBy === 'function' && container.scrollHeight > container.clientHeight) {
+        container.scrollTo(0, container.scrollHeight);
+        console.log(`[Newsance Jira] Scrolled scrollable container ${index + 1}`);
+      }
+    });
+    
+    // 5. Dispatch scroll events to trigger virtual scrolling
+    const scrollEvent = new Event('scroll', { bubbles: true });
+    virtualLists.forEach(list => {
+      list.dispatchEvent(scrollEvent);
+    });
+    document.dispatchEvent(scrollEvent);
+    window.dispatchEvent(scrollEvent);
+    
+    // 6. Try to trigger intersection observer by moving elements in/out of view
+    if (boardContainer) {
+      const currentScroll = boardContainer.scrollTop;
+      boardContainer.scrollTo(0, 0); // Top
+      await new Promise(resolve => setTimeout(resolve, 100));
+      boardContainer.scrollTo(0, boardContainer.scrollHeight); // Bottom
+      await new Promise(resolve => setTimeout(resolve, 100));
+      boardContainer.scrollTo(0, currentScroll); // Back to original position
+    }
+    
+    // Wait for content to load (longer wait for more attempts)
+    const waitTime = attempts < 10 ? 1500 : 3000;
+    await new Promise(resolve => setTimeout(resolve, waitTime));
     attempts++;
   }
   
-  console.log(`[Newsance Jira] Finished scrolling. Final count: ${document.querySelectorAll('[id^="card-BIP-"]').length} cards`);
+  const finalCount = document.querySelectorAll('[id^="card-BIP-"]').length;
+  console.log(`[Newsance Jira] Finished scrolling after ${attempts} attempts. Final count: ${finalCount} cards`);
+  
+  // Log column counts from the UI for debugging
+  const columnHeaders = document.querySelectorAll('[data-testid="platform-board-kit.common.ui.column-header.editable-title.column-title.column-name"]');
+  columnHeaders.forEach(header => {
+    const parent = header.closest('[class*="column"]');
+    console.log(`[Newsance Jira] Column "${header.textContent.trim()}" - looking for count indicators`);
+  });
 }
 
 // Listen for messages from popup
