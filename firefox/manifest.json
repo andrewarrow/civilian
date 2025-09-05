@@ -1,0 +1,28 @@
+{
+  "name": "civilian",
+  "version": "1.0",
+  "manifest_version": 3,
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://trypura.atlassian.net/*"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [{
+    "matches": ["https://trypura.atlassian.net/*"],
+    "js": ["content.js"]
+  }],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "civilian",
+    "default_icon": "cli.jpg"
+  },
+  "icons": {
+    "48": "cli.jpg"
+  }
+}
