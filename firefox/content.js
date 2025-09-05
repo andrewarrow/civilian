@@ -140,213 +140,181 @@ function findSubredditContext(element) {
 async function extractJiraIssues() {
   console.log('[Newsance Jira] Starting Jira issue extraction...');
   
-  // First, try to load all issues by scrolling to trigger virtual scrolling
-  await scrollToLoadAllIssues();
+  // Get immediately visible issues first
+  let issues = extractCurrentlyVisibleIssues();
+  console.log(`[Newsance Jira] Found ${issues.length} immediately visible issues`);
   
-  const issues = [];
+  // If we have a decent number, return them quickly
+  if (issues.length >= 8) {
+    console.log('[Newsance Jira] Returning immediately visible issues for speed');
+    return issues;
+  }
   
-  // Find all issue cards by their unique ID pattern
-  const cardElements = document.querySelectorAll('[id^="card-BIP-"]');
+  // Otherwise, try a quick scroll to load more
+  console.log('[Newsance Jira] Attempting quick scroll to find more issues...');
+  const allDiscoveredIssues = new Map();
   
-  console.log(`[Newsance Jira] Found ${cardElements.length} BIP issue cards`);
-  
-  cardElements.forEach(card => {
-    // Extract issue key from card ID
-    const cardId = card.id;
-    const issueKey = cardId.replace('card-', '');
-    
-    const issueData = {
-      key: issueKey,
-      title: null,
-      type: null,
-      assignee: null,
-      column: null
-    };
-    
-    // Method 1: Extract title from aria-label of focus container button
-    const focusContainer = card.querySelector('[data-testid="platform-card.ui.card.focus-container"]');
-    if (focusContainer) {
-      const ariaLabel = focusContainer.getAttribute('aria-label');
-      if (ariaLabel) {
-        // Parse aria-label format: "BIP-253 [aroma,toi] Create subscribeHandler. Use the enter key to load the work item."
-        const titleMatch = ariaLabel.match(/^BIP-\d+\s+(.+)\.\s+Use the enter key/);
-        if (titleMatch) {
-          issueData.title = titleMatch[1];
-        }
-      }
-    }
-    
-    // Method 2: Extract title from static summary span (alternative method)
-    if (!issueData.title) {
-      const summarySpan = card.querySelector('[data-component-selector="issue-field-summary-inline-edit.ui.read.static-summary"]');
-      if (summarySpan) {
-        issueData.title = summarySpan.textContent.trim();
-      }
-    }
-    
-    // Extract issue type from image alt attribute
-    const typeImg = card.querySelector('img[alt][class*="_1bsb7vkz"]');
-    if (typeImg) {
-      issueData.type = typeImg.getAttribute('alt');
-    }
-    
-    // Extract assignee from hidden span
-    const assigneeSpan = card.querySelector('span[id][hidden]');
-    if (assigneeSpan) {
-      let assigneeText = assigneeSpan.textContent.trim();
-      // Clean up "Assignee: " prefix if present
-      if (assigneeText.startsWith('Assignee: ')) {
-        assigneeText = assigneeText.substring(10);
-      }
-      issueData.assignee = assigneeText;
-    }
-    
-    // Find column by traversing up to find the nearest column header
-    let element = card;
-    while (element && !issueData.column) {
-      element = element.parentElement;
-      
-      // Look for column title within this element
-      const columnTitle = element?.querySelector('[data-testid="platform-board-kit.common.ui.column-header.editable-title.column-title.column-name"]');
-      if (columnTitle) {
-        issueData.column = columnTitle.textContent.trim();
-        break;
-      }
-    }
-    
-    // If column not found via traversal, try a different approach
-    if (!issueData.column) {
-      // Get all column headers on the page
-      const columnHeaders = document.querySelectorAll('[data-testid="platform-board-kit.common.ui.column-header.editable-title.column-title.column-name"]');
-      const cardRect = card.getBoundingClientRect();
-      
-      // Find the column header that's closest horizontally to this card
-      let closestColumn = null;
-      let closestDistance = Infinity;
-      
-      columnHeaders.forEach(header => {
-        const headerRect = header.getBoundingClientRect();
-        const distance = Math.abs(cardRect.left - headerRect.left);
-        if (distance < closestDistance) {
-          closestDistance = distance;
-          closestColumn = header;
-        }
-      });
-      
-      if (closestColumn) {
-        issueData.column = closestColumn.textContent.trim();
-      }
-    }
-    
-    issues.push(issueData);
+  // Add current issues to the map
+  issues.forEach(issue => {
+    allDiscoveredIssues.set(issue.key, issue);
   });
   
-  console.log(`[Newsance Jira] Extracted ${issues.length} issues:`, issues);
+  // Try a few quick scroll attempts
+  await quickScrollToLoadMore(allDiscoveredIssues);
+  
+  const finalIssues = Array.from(allDiscoveredIssues.values());
+  console.log(`[Newsance Jira] Final extraction complete. Found ${finalIssues.length} unique issues`);
+  return finalIssues;
+}
+
+function extractCurrentlyVisibleIssues() {
+  const issues = [];
+  const cardElements = document.querySelectorAll('[id^="card-BIP-"]');
+  
+  cardElements.forEach(card => {
+    const issueData = extractSingleCard(card);
+    if (issueData.key) {
+      issues.push(issueData);
+    }
+  });
+  
   return issues;
 }
 
-async function scrollToLoadAllIssues() {
-  console.log('[Newsance Jira] Attempting to load all issues via scrolling...');
+function extractSingleCard(card) {
+  // Extract issue key from card ID
+  const cardId = card.id;
+  const issueKey = cardId.replace('card-', '');
   
-  let previousCardCount = 0;
-  let currentCardCount = 0;
-  let attempts = 0;
-  const maxAttempts = 25; // Increased attempts
-  let stableCount = 0; // Track how many times count stayed the same
+  const issueData = {
+    key: issueKey,
+    title: null,
+    type: null,
+    assignee: null,
+    column: null
+  };
   
-  while (attempts < maxAttempts && stableCount < 5) {
-    // Count current cards
-    currentCardCount = document.querySelectorAll('[id^="card-BIP-"]').length;
-    console.log(`[Newsance Jira] Attempt ${attempts + 1}: Found ${currentCardCount} cards`);
-    
-    // If no new cards loaded, increment stable count
-    if (currentCardCount === previousCardCount) {
-      stableCount++;
-      console.log(`[Newsance Jira] Card count stable (${stableCount}/5)`);
-    } else {
-      stableCount = 0; // Reset stable count if new cards found
-    }
-    
-    previousCardCount = currentCardCount;
-    
-    // More aggressive scrolling strategy
-    
-    // 1. Scroll the main window
-    window.scrollBy(0, 1000);
-    window.scrollBy(1000, 0);
-    
-    // 2. Find and scroll board container
-    const boardContainer = document.querySelector('[data-testid="software-board.board-container.board"]');
-    if (boardContainer) {
-      boardContainer.scrollBy(1000, 0);
-      boardContainer.scrollBy(0, 1000);
-      // Try scrolling to specific positions
-      boardContainer.scrollTo(0, boardContainer.scrollHeight);
-      boardContainer.scrollTo(boardContainer.scrollWidth, 0);
-    }
-    
-    // 3. Find all virtual list wrappers and scroll them extensively
-    const virtualLists = document.querySelectorAll('[data-testid="software-board.board-container.board.virtual-board.fast-virtual-list.fast-virtual-list-wrapper"]');
-    virtualLists.forEach((list, index) => {
-      console.log(`[Newsance Jira] Scrolling virtual list ${index + 1}, height: ${list.scrollHeight}`);
-      // Scroll to bottom
-      list.scrollTo(0, list.scrollHeight);
-      // Scroll step by step
-      for (let i = 0; i < 10; i++) {
-        list.scrollBy(0, 200);
+  // Method 1: Extract title from aria-label of focus container button
+  const focusContainer = card.querySelector('[data-testid="platform-card.ui.card.focus-container"]');
+  if (focusContainer) {
+    const ariaLabel = focusContainer.getAttribute('aria-label');
+    if (ariaLabel) {
+      // Parse aria-label format: "BIP-253 [aroma,toi] Create subscribeHandler. Use the enter key to load the work item."
+      const titleMatch = ariaLabel.match(/^BIP-\d+\s+(.+)\.\s+Use the enter key/);
+      if (titleMatch) {
+        issueData.title = titleMatch[1];
       }
-    });
-    
-    // 4. Find all scrollable containers and scroll them
-    const allScrollables = [
-      ...document.querySelectorAll('[data-testid*="virtual"]'),
-      ...document.querySelectorAll('[class*="virtual"]'),
-      ...document.querySelectorAll('ul[style*="min-height"]'),
-      ...document.querySelectorAll('[style*="overflow-y"]'),
-      ...document.querySelectorAll('[data-component-selector*="column"]')
-    ];
-    
-    allScrollables.forEach((container, index) => {
-      if (container && typeof container.scrollBy === 'function' && container.scrollHeight > container.clientHeight) {
-        container.scrollTo(0, container.scrollHeight);
-        console.log(`[Newsance Jira] Scrolled scrollable container ${index + 1}`);
-      }
-    });
-    
-    // 5. Dispatch scroll events to trigger virtual scrolling
-    const scrollEvent = new Event('scroll', { bubbles: true });
-    virtualLists.forEach(list => {
-      list.dispatchEvent(scrollEvent);
-    });
-    document.dispatchEvent(scrollEvent);
-    window.dispatchEvent(scrollEvent);
-    
-    // 6. Try to trigger intersection observer by moving elements in/out of view
-    if (boardContainer) {
-      const currentScroll = boardContainer.scrollTop;
-      boardContainer.scrollTo(0, 0); // Top
-      await new Promise(resolve => setTimeout(resolve, 100));
-      boardContainer.scrollTo(0, boardContainer.scrollHeight); // Bottom
-      await new Promise(resolve => setTimeout(resolve, 100));
-      boardContainer.scrollTo(0, currentScroll); // Back to original position
     }
-    
-    // Wait for content to load (longer wait for more attempts)
-    const waitTime = attempts < 10 ? 1500 : 3000;
-    await new Promise(resolve => setTimeout(resolve, waitTime));
-    attempts++;
   }
   
-  const finalCount = document.querySelectorAll('[id^="card-BIP-"]').length;
-  console.log(`[Newsance Jira] Finished scrolling after ${attempts} attempts. Final count: ${finalCount} cards`);
+  // Method 2: Extract title from static summary span (alternative method)
+  if (!issueData.title) {
+    const summarySpan = card.querySelector('[data-component-selector="issue-field-summary-inline-edit.ui.read.static-summary"]');
+    if (summarySpan) {
+      issueData.title = summarySpan.textContent.trim();
+    }
+  }
   
-  // Log column counts from the UI for debugging
-  const columnHeaders = document.querySelectorAll('[data-testid="platform-board-kit.common.ui.column-header.editable-title.column-title.column-name"]');
-  columnHeaders.forEach(header => {
-    const parent = header.closest('[class*="column"]');
-    console.log(`[Newsance Jira] Column "${header.textContent.trim()}" - looking for count indicators`);
-  });
+  // Extract issue type from image alt attribute
+  const typeImg = card.querySelector('img[alt][class*="_1bsb7vkz"]');
+  if (typeImg) {
+    issueData.type = typeImg.getAttribute('alt');
+  }
+  
+  // Extract assignee from hidden span
+  const assigneeSpan = card.querySelector('span[id][hidden]');
+  if (assigneeSpan) {
+    let assigneeText = assigneeSpan.textContent.trim();
+    // Clean up "Assignee: " prefix if present
+    if (assigneeText.startsWith('Assignee: ')) {
+      assigneeText = assigneeText.substring(10);
+    }
+    issueData.assignee = assigneeText;
+  }
+  
+  // Find column by traversing up to find the nearest column header
+  let element = card;
+  while (element && !issueData.column) {
+    element = element.parentElement;
+    
+    // Look for column title within this element
+    const columnTitle = element?.querySelector('[data-testid="platform-board-kit.common.ui.column-header.editable-title.column-title.column-name"]');
+    if (columnTitle) {
+      issueData.column = columnTitle.textContent.trim();
+      break;
+    }
+  }
+  
+  // If column not found via traversal, try a different approach
+  if (!issueData.column) {
+    // Get all column headers on the page
+    const columnHeaders = document.querySelectorAll('[data-testid="platform-board-kit.common.ui.column-header.editable-title.column-title.column-name"]');
+    const cardRect = card.getBoundingClientRect();
+    
+    // Find the column header that's closest horizontally to this card
+    let closestColumn = null;
+    let closestDistance = Infinity;
+    
+    columnHeaders.forEach(header => {
+      const headerRect = header.getBoundingClientRect();
+      const distance = Math.abs(cardRect.left - headerRect.left);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestColumn = header;
+      }
+    });
+    
+    if (closestColumn) {
+      issueData.column = closestColumn.textContent.trim();
+    }
+  }
+  
+  return issueData;
 }
+
+async function quickScrollToLoadMore(allDiscoveredIssues) {
+  console.log('[Newsance Jira] Quick scroll to load more issues...');
+  
+  // Only try 5 quick attempts
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const beforeCount = allDiscoveredIssues.size;
+    
+    // Simple scrolling - just try to scroll each virtual list down
+    const virtualLists = document.querySelectorAll('[data-testid="software-board.board-container.board.virtual-board.fast-virtual-list.fast-virtual-list-wrapper"]');
+    virtualLists.forEach(list => {
+      list.scrollBy(0, 300); // Small scroll
+    });
+    
+    // Wait briefly for content to load
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Check for new issues
+    const cardElements = document.querySelectorAll('[id^="card-BIP-"]');
+    cardElements.forEach(card => {
+      const cardId = card.id;
+      const issueKey = cardId.replace('card-', '');
+      
+      if (!allDiscoveredIssues.has(issueKey)) {
+        const issueData = extractSingleCard(card);
+        if (issueData.key) {
+          allDiscoveredIssues.set(issueKey, issueData);
+        }
+      }
+    });
+    
+    const afterCount = allDiscoveredIssues.size;
+    const newFound = afterCount - beforeCount;
+    
+    console.log(`[Newsance Jira] Quick attempt ${attempt + 1}: Found ${newFound} new issues, total: ${afterCount}`);
+    
+    // If no new issues found in this attempt, stop early
+    if (newFound === 0 && attempt > 1) {
+      console.log('[Newsance Jira] No new issues found, stopping quick scroll');
+      break;
+    }
+  }
+}
+
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
