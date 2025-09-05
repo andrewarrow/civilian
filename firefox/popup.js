@@ -51,10 +51,22 @@ document.addEventListener('DOMContentLoaded', () => {
       randomWordBtn.addEventListener('click', handleYouTubeRandomWordClick);
       
       usernamesContainer.innerHTML = '<div class="no-data">Random word search for YouTube videos</div>';
+    } else if (url.includes('atlassian.net')) {
+      const siteSpan = siteDisplay.querySelector('span');
+      siteSpan.textContent = 'Jira';
+      
+      // Send message to content script to get Jira issues
+      chrome.tabs.sendMessage(tabs[0].id, { type: 'GET_JIRA_ISSUES' }, (response) => {
+        if (response && response.issues && response.issues.length > 0) {
+          displayJiraIssues(response.issues);
+        } else {
+          usernamesContainer.innerHTML = '<div class="no-data">No Jira issues found on this page</div>';
+        }
+      });
     } else {
       const siteSpan = siteDisplay.querySelector('span');
       siteSpan.textContent = 'n/a';
-      usernamesContainer.innerHTML = '<div class="no-data">Visit Hacker News, Reddit, or YouTube to see usernames</div>';
+      usernamesContainer.innerHTML = '<div class="no-data">Visit Hacker News, Reddit, YouTube, or Jira to see data</div>';
     }
   });
 });
@@ -149,6 +161,50 @@ function displayRedditTable() {
   
   tableHtml += '</tbody></table>';
   usernamesContainer.innerHTML = tableHtml;
+}
+
+function displayJiraIssues(issues) {
+  const usernamesContainer = document.getElementById('usernames-container');
+  
+  // Group issues by column
+  const issuesByColumn = {};
+  issues.forEach(issue => {
+    const column = issue.column || 'Unknown';
+    if (!issuesByColumn[column]) {
+      issuesByColumn[column] = [];
+    }
+    issuesByColumn[column].push(issue);
+  });
+  
+  // Create CLI-style output
+  let cliOutput = `JIRA BOARD STATUS
+====================
+
+Total Issues: ${issues.length}
+Columns: ${Object.keys(issuesByColumn).join(', ')}
+
+`;
+
+  Object.keys(issuesByColumn).forEach(columnName => {
+    const columnIssues = issuesByColumn[columnName];
+    cliOutput += `[${columnName}] (${columnIssues.length} issues)
+${'-'.repeat(columnName.length + 12)}
+`;
+    
+    columnIssues.forEach(issue => {
+      const assignee = issue.assignee === 'Unassigned' ? 'UNASSIGNED' : issue.assignee;
+      const type = issue.type ? `[${issue.type.toUpperCase()}]` : '[UNKNOWN]';
+      
+      cliOutput += `  ${issue.key} ${type} ${assignee}
+    ${issue.title || 'No title'}
+
+`;
+    });
+    
+    cliOutput += '\n';
+  });
+  
+  usernamesContainer.innerHTML = `<pre class="cli-output">${cliOutput}</pre>`;
 }
 
 function addNewUsernames(newUsernamesData) {

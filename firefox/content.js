@@ -9,6 +9,9 @@ function detectSite() {
   } else if (hostname.includes('reddit.com')) {
     console.log('[Newsance] Detected Reddit');
     return 'reddit';
+  } else if (hostname.includes('atlassian.net')) {
+    console.log('[Newsance] Detected Jira');
+    return 'jira';
   }
   
   return null;
@@ -134,6 +137,110 @@ function findSubredditContext(element) {
   return 'N/A';
 }
 
+function extractJiraIssues() {
+  console.log('[Newsance Jira] Starting Jira issue extraction...');
+  const issues = [];
+  
+  // Find all issue cards by their unique ID pattern
+  const cardElements = document.querySelectorAll('[id^="card-BIP-"]');
+  
+  console.log(`[Newsance Jira] Found ${cardElements.length} BIP issue cards`);
+  
+  cardElements.forEach(card => {
+    // Extract issue key from card ID
+    const cardId = card.id;
+    const issueKey = cardId.replace('card-', '');
+    
+    const issueData = {
+      key: issueKey,
+      title: null,
+      type: null,
+      assignee: null,
+      column: null
+    };
+    
+    // Method 1: Extract title from aria-label of focus container button
+    const focusContainer = card.querySelector('[data-testid="platform-card.ui.card.focus-container"]');
+    if (focusContainer) {
+      const ariaLabel = focusContainer.getAttribute('aria-label');
+      if (ariaLabel) {
+        // Parse aria-label format: "BIP-253 [aroma,toi] Create subscribeHandler. Use the enter key to load the work item."
+        const titleMatch = ariaLabel.match(/^BIP-\d+\s+(.+)\.\s+Use the enter key/);
+        if (titleMatch) {
+          issueData.title = titleMatch[1];
+        }
+      }
+    }
+    
+    // Method 2: Extract title from static summary span (alternative method)
+    if (!issueData.title) {
+      const summarySpan = card.querySelector('[data-component-selector="issue-field-summary-inline-edit.ui.read.static-summary"]');
+      if (summarySpan) {
+        issueData.title = summarySpan.textContent.trim();
+      }
+    }
+    
+    // Extract issue type from image alt attribute
+    const typeImg = card.querySelector('img[alt][class*="_1bsb7vkz"]');
+    if (typeImg) {
+      issueData.type = typeImg.getAttribute('alt');
+    }
+    
+    // Extract assignee from hidden span
+    const assigneeSpan = card.querySelector('span[id][hidden]');
+    if (assigneeSpan) {
+      let assigneeText = assigneeSpan.textContent.trim();
+      // Clean up "Assignee: " prefix if present
+      if (assigneeText.startsWith('Assignee: ')) {
+        assigneeText = assigneeText.substring(10);
+      }
+      issueData.assignee = assigneeText;
+    }
+    
+    // Find column by traversing up to find the nearest column header
+    let element = card;
+    while (element && !issueData.column) {
+      element = element.parentElement;
+      
+      // Look for column title within this element
+      const columnTitle = element?.querySelector('[data-testid="platform-board-kit.common.ui.column-header.editable-title.column-title.column-name"]');
+      if (columnTitle) {
+        issueData.column = columnTitle.textContent.trim();
+        break;
+      }
+    }
+    
+    // If column not found via traversal, try a different approach
+    if (!issueData.column) {
+      // Get all column headers on the page
+      const columnHeaders = document.querySelectorAll('[data-testid="platform-board-kit.common.ui.column-header.editable-title.column-title.column-name"]');
+      const cardRect = card.getBoundingClientRect();
+      
+      // Find the column header that's closest horizontally to this card
+      let closestColumn = null;
+      let closestDistance = Infinity;
+      
+      columnHeaders.forEach(header => {
+        const headerRect = header.getBoundingClientRect();
+        const distance = Math.abs(cardRect.left - headerRect.left);
+        if (distance < closestDistance) {
+          closestDistance = distance;
+          closestColumn = header;
+        }
+      });
+      
+      if (closestColumn) {
+        issueData.column = closestColumn.textContent.trim();
+      }
+    }
+    
+    issues.push(issueData);
+  });
+  
+  console.log(`[Newsance Jira] Extracted ${issues.length} issues:`, issues);
+  return issues;
+}
+
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'GET_USERNAMES') {
@@ -146,6 +253,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ usernames: data });
     } else {
       sendResponse({ usernames: [] });
+    }
+    return true;
+  } else if (message.type === 'GET_JIRA_ISSUES') {
+    const site = detectSite();
+    if (site === 'jira') {
+      const data = extractJiraIssues();
+      sendResponse({ issues: data });
+    } else {
+      sendResponse({ issues: [] });
     }
     return true;
   }
