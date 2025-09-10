@@ -2,6 +2,7 @@ console.log('[Newsance] Content script loaded on:', window.location.href);
 
 function detectSite() {
   const hostname = window.location.hostname;
+  const pathname = window.location.pathname;
   
   if (hostname === 'news.ycombinator.com') {
     console.log('[Newsance] Detected Hacker News');
@@ -13,8 +14,14 @@ function detectSite() {
     console.log('[Newsance] Detected Jira');
     return 'jira';
   } else if (hostname === 'www.youtube.com') {
-    console.log('[Newsance] Detected YouTube');
-    return 'youtube';
+    // Only activate on YouTube homepage, not on individual video pages or other paths
+    if (pathname === '/' || pathname === '') {
+      console.log('[Newsance] Detected YouTube Homepage');
+      return 'youtube';
+    } else {
+      console.log(`[Newsance] YouTube detected but ignoring path: ${pathname}`);
+      return null;
+    }
   }
   
   return null;
