@@ -50,7 +50,14 @@ document.addEventListener('DOMContentLoaded', () => {
       // Set up random word button for YouTube
       randomWordBtn.addEventListener('click', handleYouTubeRandomWordClick);
       
-      usernamesContainer.innerHTML = '<div class="no-data">Random word search for YouTube videos</div>';
+      // Send message to content script to get YouTube videos
+      chrome.tabs.sendMessage(tabs[0].id, { type: 'GET_YOUTUBE_VIDEOS' }, (response) => {
+        if (response && response.videos && response.videos.length > 0) {
+          displayYouTubeVideos(response.videos);
+        } else {
+          usernamesContainer.innerHTML = '<div class="no-data">No videos found on this YouTube page. Use Random Word to search.</div>';
+        }
+      });
     } else if (url.includes('atlassian.net')) {
       const siteSpan = siteDisplay.querySelector('span');
       siteSpan.textContent = 'Jira';
@@ -205,6 +212,31 @@ ${'-'.repeat(columnName.length + 12)}
   });
   
   usernamesContainer.innerHTML = `<pre class="cli-output">${cliOutput}</pre>`;
+}
+
+function displayYouTubeVideos(videos) {
+  const usernamesContainer = document.getElementById('usernames-container');
+  
+  // Create Craigslist-style video listing
+  let videoListHtml = '<div class="video-list">';
+  
+  videos.forEach((video, index) => {
+    if (video.title) {
+      // Create a simple, text-based listing like Craigslist
+      videoListHtml += `<div class="video-item">
+        <a href="${video.url || '#'}" target="_blank" class="video-link">
+          ${video.title}
+        </a>
+        ${video.channel ? `<span class="video-channel"> (${video.channel})</span>` : ''}
+        ${video.views || video.duration ? 
+          `<span class="video-meta"> - ${[video.views, video.duration].filter(v => v).join(' • ')}</span>` : ''
+        }
+      </div>`;
+    }
+  });
+  
+  videoListHtml += '</div>';
+  usernamesContainer.innerHTML = videoListHtml;
 }
 
 function addNewUsernames(newUsernamesData) {

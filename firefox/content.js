@@ -12,6 +12,9 @@ function detectSite() {
   } else if (hostname.includes('atlassian.net')) {
     console.log('[Newsance] Detected Jira');
     return 'jira';
+  } else if (hostname === 'www.youtube.com') {
+    console.log('[Newsance] Detected YouTube');
+    return 'youtube';
   }
   
   return null;
@@ -315,6 +318,347 @@ async function quickScrollToLoadMore(allDiscoveredIssues) {
   }
 }
 
+function extractYouTubeVideos() {
+  console.log('[Newsance YouTube] Starting YouTube video extraction...');
+  const videos = [];
+  
+  // Try multiple selectors to be more robust
+  const videoElements = document.querySelectorAll('ytd-rich-item-renderer');
+  console.log(`[Newsance YouTube] Found ${videoElements.length} video elements`);
+  
+  videoElements.forEach((element, index) => {
+    try {
+      // Try multiple selectors for video title links
+      const titleSelectors = [
+        'a#video-title',
+        '#video-title-link',
+        'a[href*="/watch?v="]',
+        'h3 a',
+        '.title a',
+        'ytd-video-meta-block a'
+      ];
+      
+      let titleLink = null;
+      let title = null;
+      let url = null;
+      
+      // Try each selector until we find one that works
+      for (const selector of titleSelectors) {
+        titleLink = element.querySelector(selector);
+        if (titleLink) {
+          title = titleLink.textContent?.trim() || titleLink.getAttribute('title') || titleLink.getAttribute('aria-label');
+          url = titleLink.href;
+          
+          if (title && url && url.includes('/watch?v=')) {
+            console.log(`[Newsance YouTube] Found video using selector "${selector}": ${title.substring(0, 50)}...`);
+            break;
+          }
+        }
+      }
+      
+      // If we still don't have a title, try getting any link with watch?v=
+      if (!title || !url) {
+        const anyVideoLink = element.querySelector('a[href*="/watch?v="]');
+        if (anyVideoLink) {
+          title = anyVideoLink.textContent?.trim() || anyVideoLink.getAttribute('title') || anyVideoLink.getAttribute('aria-label') || `Video ${index + 1}`;
+          url = anyVideoLink.href;
+          console.log(`[Newsance YouTube] Found video via fallback method: ${title.substring(0, 50)}...`);
+        }
+      }
+      
+      if (title && url) {
+        videos.push({
+          title: title,
+          url: url,
+          videoId: url.includes('v=') ? url.split('v=')[1].split('&')[0] : null,
+          channel: null,
+          views: null,
+          duration: null
+        });
+      } else {
+        console.log(`[Newsance YouTube] Could not extract title/url from element ${index}`);
+      }
+    } catch (error) {
+      console.warn('[Newsance YouTube] Error extracting video data:', error);
+    }
+  });
+  
+  // If we didn't find any videos with the main method, try a broader search
+  if (videos.length === 0) {
+    console.log('[Newsance YouTube] No videos found with main method, trying broader search...');
+    
+    // Try finding ALL video links on the page
+    const allVideoLinks = document.querySelectorAll('a[href*="/watch?v="]');
+    console.log(`[Newsance YouTube] Found ${allVideoLinks.length} video links on page`);
+    
+    const seenUrls = new Set();
+    allVideoLinks.forEach((link, index) => {
+      if (seenUrls.has(link.href) || videos.length >= 50) return;
+      
+      const title = link.textContent?.trim() || 
+                   link.getAttribute('title') || 
+                   link.getAttribute('aria-label') || 
+                   `Video ${videos.length + 1}`;
+      
+      if (title && title.length > 3 && !title.includes('Subscribe') && !title.includes('Channel')) {
+        videos.push({
+          title: title,
+          url: link.href,
+          videoId: link.href.includes('v=') ? link.href.split('v=')[1].split('&')[0] : null,
+          channel: null,
+          views: null,
+          duration: null
+        });
+        seenUrls.add(link.href);
+        console.log(`[Newsance YouTube] Added via broad search: ${title.substring(0, 50)}...`);
+      }
+    });
+  }
+  
+  console.log(`[Newsance YouTube] Final extraction complete. Found ${videos.length} videos with titles`);
+  return videos.slice(0, 50); // Limit to 50 videos for performance
+}
+
+function extractSingleYouTubeVideo(element) {
+  const videoData = {
+    title: null,
+    videoId: null,
+    channel: null,
+    views: null,
+    duration: null,
+    publishedTime: null,
+    url: null
+  };
+  
+  // Extract video title
+  const titleSelectors = [
+    '#video-title',
+    'a#video-title',
+    '.title a',
+    'h3 a',
+    '[aria-label*="by"]' // Sometimes title is in aria-label
+  ];
+  
+  for (const selector of titleSelectors) {
+    const titleElement = element.querySelector(selector);
+    if (titleElement) {
+      videoData.title = titleElement.textContent?.trim() || titleElement.getAttribute('aria-label')?.split(' by ')[0]?.trim();
+      if (videoData.title) break;
+    }
+  }
+  
+  // Extract video URL and ID
+  const linkElement = element.querySelector('a#video-title, a[href*="/watch?v="]');
+  if (linkElement) {
+    const href = linkElement.getAttribute('href');
+    if (href) {
+      // Handle relative URLs
+      const fullUrl = href.startsWith('http') ? href : `https://www.youtube.com${href}`;
+      videoData.url = fullUrl;
+      
+      // Extract video ID from URL
+      const videoIdMatch = href.match(/[?&]v=([a-zA-Z0-9_-]+)/);
+      if (videoIdMatch) {
+        videoData.videoId = videoIdMatch[1];
+      }
+    }
+  }
+  
+  // Extract channel name
+  const channelSelectors = [
+    'ytd-channel-name a',
+    '.ytd-channel-name a',
+    '[class*="channel-name"] a',
+    '.metadata a[href*="/channel/"], .metadata a[href*="/@"]'
+  ];
+  
+  for (const selector of channelSelectors) {
+    const channelElement = element.querySelector(selector);
+    if (channelElement) {
+      videoData.channel = channelElement.textContent?.trim();
+      if (videoData.channel) break;
+    }
+  }
+  
+  // Extract view count - search for elements that might contain view counts
+  const potentialViewsElements = element.querySelectorAll('span');
+  for (const span of potentialViewsElements) {
+    const text = span.textContent?.trim();
+    if (text && (text.includes('views') || text.includes('view'))) {
+      videoData.views = text;
+      break;
+    }
+  }
+  
+  // Extract duration
+  const durationElement = element.querySelector('.ytd-thumbnail-overlay-time-status-renderer, [class*="duration"]');
+  if (durationElement) {
+    videoData.duration = durationElement.textContent?.trim();
+  }
+  
+  // Extract published time
+  const timeElement = element.querySelector('[class*="published"] span, .metadata span[aria-label*="ago"]');
+  if (timeElement) {
+    videoData.publishedTime = timeElement.textContent?.trim();
+  }
+  
+  return videoData;
+}
+
+function replaceYouTubeHomepage() {
+  console.log('[Newsance YouTube] Replacing YouTube homepage with Craigslist-style layout...');
+  
+  // Wait longer for YouTube to fully load and render content
+  setTimeout(() => {
+    console.log('[Newsance YouTube] First attempt at video extraction...');
+    const videos = extractYouTubeVideos();
+    if (videos.length > 0) {
+      injectCraigslistLayout(videos);
+    } else {
+      // Wait even longer for YouTube's lazy loading
+      console.log('[Newsance YouTube] No videos found, waiting longer...');
+      setTimeout(() => {
+        console.log('[Newsance YouTube] Second attempt at video extraction...');
+        const retryVideos = extractYouTubeVideos();
+        if (retryVideos.length > 0) {
+          injectCraigslistLayout(retryVideos);
+        } else {
+          // Final attempt with even more time
+          console.log('[Newsance YouTube] Still no videos, final attempt...');
+          setTimeout(() => {
+            console.log('[Newsance YouTube] Final attempt at video extraction...');
+            const finalVideos = extractYouTubeVideos();
+            injectCraigslistLayout(finalVideos); // Inject regardless, even if empty
+          }, 5000);
+        }
+      }, 5000);
+    }
+  }, 4000);
+}
+
+function injectCraigslistLayout(videos) {
+  console.log(`[Newsance YouTube] Injecting Craigslist layout with ${videos.length} videos using Shadow DOM`);
+  
+  // Clear the body completely 
+  document.body.innerHTML = '';
+  document.body.style.cssText = 'margin: 0; padding: 0; background: white;';
+  
+  // Create a container element
+  const container = document.createElement('div');
+  container.id = 'craigslist-container';
+  document.body.appendChild(container);
+  
+  // Create Shadow DOM - this bypasses CSP completely!
+  const shadowRoot = container.attachShadow({ mode: 'open' });
+  
+  // Create our styles (not subject to CSP in shadow DOM)
+  const styles = `
+    <style>
+      * { box-sizing: border-box; }
+      body, div { margin: 0; padding: 0; }
+      .container {
+        font-family: 'Times New Roman', serif;
+        background-color: #ffffff;
+        color: #000000;
+        padding: 20px;
+        line-height: 1.4;
+        min-height: 100vh;
+      }
+      .header {
+        border-bottom: 1px solid #ccc;
+        margin-bottom: 20px;
+        padding-bottom: 10px;
+      }
+      .title {
+        font-size: 24px;
+        font-weight: normal;
+        margin: 0 0 10px 0;
+        color: #000;
+      }
+      .subtitle {
+        font-size: 12px;
+        color: #666;
+      }
+      .video-item {
+        margin-bottom: 15px;
+        padding: 8px 0;
+        border-bottom: 1px dotted #ccc;
+      }
+      .video-title {
+        margin-bottom: 4px;
+      }
+      .video-link {
+        color: #0000EE;
+        text-decoration: underline;
+        font-size: 14px;
+        font-weight: normal;
+      }
+      .video-link:hover {
+        color: #551A8B;
+      }
+      .video-meta {
+        font-size: 11px;
+        color: #666;
+        margin-left: 20px;
+      }
+      .no-videos {
+        padding: 20px;
+        color: #666;
+        font-style: italic;
+      }
+      .footer {
+        margin-top: 30px;
+        padding-top: 20px;
+        border-top: 1px solid #ccc;
+        font-size: 11px;
+        color: #999;
+        text-align: center;
+      }
+    </style>
+  `;
+  
+  // Build the HTML content
+  const videoListings = videos.length > 0 
+    ? videos.map(video => `
+        <div class="video-item">
+          <div class="video-title">
+            <a href="${video.url || '#'}" class="video-link" target="_parent">
+              ${video.title}
+            </a>
+          </div>
+          ${video.channel || video.duration || video.views ? `
+            <div class="video-meta">
+              ${[video.channel, video.duration, video.views].filter(v => v).join(' • ')}
+            </div>
+          ` : ''}
+        </div>
+      `).join('')
+    : '<div class="no-videos">No videos found. This might be because YouTube is still loading or using a different layout.</div>';
+  
+  const htmlContent = `
+    ${styles}
+    <div class="container">
+      <div class="header">
+        <h1 class="title">youtube videos</h1>
+        <div class="subtitle">${videos.length > 0 ? `${videos.length} videos found` : 'no videos found - page may still be loading'}</div>
+      </div>
+      
+      <div class="video-listings">
+        ${videoListings}
+      </div>
+      
+      <div class="footer">
+        simplified youtube • powered by civilian extension
+      </div>
+    </div>
+  `;
+  
+  // Inject into shadow DOM (bypasses all CSP restrictions!)
+  shadowRoot.innerHTML = htmlContent;
+  
+  console.log('[Newsance YouTube] Shadow DOM Craigslist layout injected successfully');
+}
+
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -344,6 +688,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ issues: [] });
     }
     return true;
+  } else if (message.type === 'GET_YOUTUBE_VIDEOS') {
+    const site = detectSite();
+    if (site === 'youtube') {
+      const data = extractYouTubeVideos();
+      sendResponse({ videos: data });
+    } else {
+      sendResponse({ videos: [] });
+    }
+    return true;
   }
 });
 
@@ -351,6 +704,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 const site = detectSite();
 if (site) {
   console.log(`[Newsance] Active on ${site}`);
+  
+  // If this is YouTube, replace the homepage with our custom layout
+  if (site === 'youtube') {
+    // Wait for the page to load, then replace content
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', replaceYouTubeHomepage);
+    } else {
+      replaceYouTubeHomepage();
+    }
+  }
 }
 
 // Track current usernames to detect new ones

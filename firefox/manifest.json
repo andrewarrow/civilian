@@ -8,13 +8,14 @@
     "tabs"
   ],
   "host_permissions": [
-    "https://trypura.atlassian.net/*"
+    "https://trypura.atlassian.net/*",
+    "https://www.youtube.com/*"
   ],
   "background": {
     "scripts": ["background.js"]
   },
   "content_scripts": [{
-    "matches": ["https://trypura.atlassian.net/*"],
+    "matches": ["https://trypura.atlassian.net/*", "https://www.youtube.com/*"],
     "js": ["content.js"]
   }],
   "action": {
