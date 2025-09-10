@@ -682,7 +682,7 @@ function injectCraigslistLayout(videos) {
     ? videos.map((video, index) => `
         <div class="video-item">
           <div class="video-title">
-            <a href="${video.url || '#'}" class="video-link" target="_parent">
+            <a href="${video.url || '#'}" class="video-link" target="_blank">
               ${video.title || `Video ${index + 1}`}
             </a>
           </div>
