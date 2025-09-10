@@ -227,13 +227,21 @@ function displayYouTubeVideos(videos) {
         <a href="${video.url || '#'}" target="_blank" class="video-link">
           ${video.title}
         </a>
-        ${video.channel ? `<span class="video-channel"> (${video.channel})</span>` : ''}
-        ${video.views || video.duration ? 
-          `<span class="video-meta"> - ${[video.views, video.duration].filter(v => v).join(' • ')}</span>` : ''
-        }
+        <div class="video-meta-line">
+          ${[
+            video.channel ? `by ${video.channel}` : null,
+            video.duration, 
+            video.views,
+            video.publishedTime
+          ].filter(v => v).join(' • ')}
+        </div>
       </div>`;
     }
   });
+  
+  if (videos.length === 0) {
+    videoListHtml += '<div class="no-videos">No videos found. Page may still be loading.</div>';
+  }
   
   videoListHtml += '</div>';
   usernamesContainer.innerHTML = videoListHtml;

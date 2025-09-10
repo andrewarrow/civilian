@@ -322,90 +322,83 @@ function extractYouTubeVideos() {
   console.log('[Newsance YouTube] Starting YouTube video extraction...');
   const videos = [];
   
-  // Try multiple selectors to be more robust
-  const videoElements = document.querySelectorAll('ytd-rich-item-renderer');
-  console.log(`[Newsance YouTube] Found ${videoElements.length} video elements`);
+  // Primary method: Look for both ytd-rich-item-renderer and ytd-rich-grid-media containers
+  const videoContainerSelectors = [
+    'ytd-rich-item-renderer',
+    'ytd-rich-grid-media',
+    'ytd-video-renderer',
+    '[class*="video-renderer"]'
+  ];
   
-  videoElements.forEach((element, index) => {
+  let allVideoElements = [];
+  videoContainerSelectors.forEach(selector => {
+    const elements = document.querySelectorAll(selector);
+    console.log(`[Newsance YouTube] Found ${elements.length} elements for selector: ${selector}`);
+    allVideoElements.push(...Array.from(elements));
+  });
+  
+  // Remove duplicates
+  allVideoElements = [...new Set(allVideoElements)];
+  console.log(`[Newsance YouTube] Total unique video elements: ${allVideoElements.length}`);
+  
+  allVideoElements.forEach((element, index) => {
     try {
-      // Try multiple selectors for video title links
-      const titleSelectors = [
-        'a#video-title',
-        '#video-title-link',
-        'a[href*="/watch?v="]',
-        'h3 a',
-        '.title a',
-        'ytd-video-meta-block a'
-      ];
-      
-      let titleLink = null;
-      let title = null;
-      let url = null;
-      
-      // Try each selector until we find one that works
-      for (const selector of titleSelectors) {
-        titleLink = element.querySelector(selector);
-        if (titleLink) {
-          title = titleLink.textContent?.trim() || titleLink.getAttribute('title') || titleLink.getAttribute('aria-label');
-          url = titleLink.href;
-          
-          if (title && url && url.includes('/watch?v=')) {
-            console.log(`[Newsance YouTube] Found video using selector "${selector}": ${title.substring(0, 50)}...`);
-            break;
-          }
-        }
-      }
-      
-      // If we still don't have a title, try getting any link with watch?v=
-      if (!title || !url) {
-        const anyVideoLink = element.querySelector('a[href*="/watch?v="]');
-        if (anyVideoLink) {
-          title = anyVideoLink.textContent?.trim() || anyVideoLink.getAttribute('title') || anyVideoLink.getAttribute('aria-label') || `Video ${index + 1}`;
-          url = anyVideoLink.href;
-          console.log(`[Newsance YouTube] Found video via fallback method: ${title.substring(0, 50)}...`);
-        }
-      }
-      
-      if (title && url) {
-        videos.push({
-          title: title,
-          url: url,
-          videoId: url.includes('v=') ? url.split('v=')[1].split('&')[0] : null,
-          channel: null,
-          views: null,
-          duration: null
-        });
-      } else {
-        console.log(`[Newsance YouTube] Could not extract title/url from element ${index}`);
+      const videoData = extractSingleYouTubeVideo(element, index);
+      if (videoData.title && videoData.url) {
+        videos.push(videoData);
+        console.log(`[Newsance YouTube] Extracted: ${videoData.title.substring(0, 50)}... (Channel: ${videoData.channel || 'N/A'})`);
       }
     } catch (error) {
       console.warn('[Newsance YouTube] Error extracting video data:', error);
     }
   });
   
-  // If we didn't find any videos with the main method, try a broader search
-  if (videos.length === 0) {
-    console.log('[Newsance YouTube] No videos found with main method, trying broader search...');
+  // If we didn't find many videos, try a broader search for all video links
+  if (videos.length < 10) {
+    console.log('[Newsance YouTube] Low video count, trying broader search...');
     
-    // Try finding ALL video links on the page
     const allVideoLinks = document.querySelectorAll('a[href*="/watch?v="]');
     console.log(`[Newsance YouTube] Found ${allVideoLinks.length} video links on page`);
     
-    const seenUrls = new Set();
+    const seenUrls = new Set(videos.map(v => v.url));
+    
     allVideoLinks.forEach((link, index) => {
-      if (seenUrls.has(link.href) || videos.length >= 50) return;
+      if (seenUrls.has(link.href) || videos.length >= 100) return;
       
-      const title = link.textContent?.trim() || 
-                   link.getAttribute('title') || 
-                   link.getAttribute('aria-label') || 
-                   `Video ${videos.length + 1}`;
+      // Get title from various sources
+      let title = link.textContent?.trim() || 
+                 link.getAttribute('title') || 
+                 link.getAttribute('aria-label');
       
-      if (title && title.length > 3 && !title.includes('Subscribe') && !title.includes('Channel')) {
+      // Clean up the title
+      if (title) {
+        // Remove duration info from aria-label if present
+        title = title.replace(/\s+\d+:\d+$/, '').replace(/\s+\d+ seconds?$/, '').trim();
+        
+        // Skip if it's not a real video title
+        if (title.length < 3 || 
+            title.includes('Subscribe') || 
+            title.includes('Channel') ||
+            title.includes('Go to channel') ||
+            title.includes('Tap to')) {
+          return;
+        }
+        
+        // Try to find channel from parent element
+        let channel = null;
+        const parent = link.closest('ytd-rich-grid-media, ytd-rich-item-renderer, ytd-video-renderer');
+        if (parent) {
+          const channelElement = parent.querySelector('ytd-channel-name a, [id*="channel"] a, .channel-name a');
+          if (channelElement) {
+            channel = channelElement.textContent?.trim() || null;
+          }
+        }
+        
         videos.push({
           title: title,
           url: link.href,
           videoId: link.href.includes('v=') ? link.href.split('v=')[1].split('&')[0] : null,
-          channel: null,
+          channel: channel,
           views: null,
           duration: null
         });
@@ -415,11 +408,11 @@ function extractYouTubeVideos() {
     });
   }
   
-  console.log(`[Newsance YouTube] Final extraction complete. Found ${videos.length} videos with titles`);
-  return videos.slice(0, 50); // Limit to 50 videos for performance
+  console.log(`[Newsance YouTube] Final extraction complete. Found ${videos.length} unique videos`);
+  return videos.slice(0, 100); // Increased limit to 100 videos
 }
 
-function extractSingleYouTubeVideo(element) {
+function extractSingleYouTubeVideo(element, index = 0) {
   const videoData = {
     title: null,
     videoId: null,
@@ -430,76 +423,136 @@ function extractSingleYouTubeVideo(element) {
     url: null
   };
   
-  // Extract video title
+  // Extract video title - improved selectors based on HTML structure
   const titleSelectors = [
-    '#video-title',
+    'a#video-title-link',  // Primary selector from HTML
+    '#video-title-link',
+    'yt-formatted-string#video-title',  // Title text element
     'a#video-title',
-    '.title a',
-    'h3 a',
-    '[aria-label*="by"]' // Sometimes title is in aria-label
+    '#video-title',
+    'h3 a[href*="/watch?v="]',
+    '.title a[href*="/watch?v="]'
   ];
   
-  for (const selector of titleSelectors) {
-    const titleElement = element.querySelector(selector);
-    if (titleElement) {
-      videoData.title = titleElement.textContent?.trim() || titleElement.getAttribute('aria-label')?.split(' by ')[0]?.trim();
-      if (videoData.title) break;
-    }
-  }
+  let titleElement = null;
+  let titleText = null;
   
-  // Extract video URL and ID
-  const linkElement = element.querySelector('a#video-title, a[href*="/watch?v="]');
-  if (linkElement) {
-    const href = linkElement.getAttribute('href');
-    if (href) {
-      // Handle relative URLs
-      const fullUrl = href.startsWith('http') ? href : `https://www.youtube.com${href}`;
-      videoData.url = fullUrl;
+  for (const selector of titleSelectors) {
+    titleElement = element.querySelector(selector);
+    if (titleElement) {
+      // Try multiple ways to get title text
+      titleText = titleElement.textContent?.trim() || 
+                 titleElement.getAttribute('title')?.trim() ||
+                 titleElement.getAttribute('aria-label')?.trim();
       
-      // Extract video ID from URL
-      const videoIdMatch = href.match(/[?&]v=([a-zA-Z0-9_-]+)/);
-      if (videoIdMatch) {
-        videoData.videoId = videoIdMatch[1];
+      if (titleText && titleText.length > 3) {
+        // Clean up aria-label if it contains duration info
+        titleText = titleText.replace(/\s+\d+:\d+$/, '').replace(/\s+\d+ seconds?$/, '').trim();
+        videoData.title = titleText;
+        break;
       }
     }
   }
   
-  // Extract channel name
+  // If we still don't have title, try the formatted string directly
+  if (!videoData.title) {
+    const formattedTitle = element.querySelector('yt-formatted-string#video-title');
+    if (formattedTitle) {
+      videoData.title = formattedTitle.textContent?.trim();
+    }
+  }
+  
+  // Extract video URL and ID - prioritize the title link
+  const linkSelectors = [
+    'a#video-title-link',
+    'a[href*="/watch?v="]'
+  ];
+  
+  for (const selector of linkSelectors) {
+    const linkElement = element.querySelector(selector);
+    if (linkElement) {
+      const href = linkElement.getAttribute('href');
+      if (href && href.includes('/watch?v=')) {
+        // Handle relative URLs
+        videoData.url = href.startsWith('http') ? href : `https://www.youtube.com${href}`;
+        
+        // Extract video ID from URL
+        const videoIdMatch = href.match(/[?&]v=([a-zA-Z0-9_-]+)/);
+        if (videoIdMatch) {
+          videoData.videoId = videoIdMatch[1];
+        }
+        break;
+      }
+    }
+  }
+  
+  // Extract channel name - improved selectors
   const channelSelectors = [
-    'ytd-channel-name a',
+    'ytd-channel-name a',  // Primary channel selector
+    '#channel-name a',
     '.ytd-channel-name a',
-    '[class*="channel-name"] a',
-    '.metadata a[href*="/channel/"], .metadata a[href*="/@"]'
+    '[id*="channel-name"] a',
+    '.channel-name a',
+    'a[href*="/channel/"], a[href*="/@"]'
   ];
   
   for (const selector of channelSelectors) {
     const channelElement = element.querySelector(selector);
     if (channelElement) {
-      videoData.channel = channelElement.textContent?.trim();
-      if (videoData.channel) break;
+      const channelText = channelElement.textContent?.trim();
+      if (channelText && channelText.length > 1 && !channelText.includes('Subscribe')) {
+        videoData.channel = channelText;
+        break;
+      }
     }
   }
   
-  // Extract view count - search for elements that might contain view counts
-  const potentialViewsElements = element.querySelectorAll('span');
-  for (const span of potentialViewsElements) {
+  // Extract view count - look for metadata
+  const metadataElements = element.querySelectorAll('span, .metadata span, ytd-video-meta-block span');
+  for (const span of metadataElements) {
     const text = span.textContent?.trim();
-    if (text && (text.includes('views') || text.includes('view'))) {
+    if (text && (text.includes('views') || text.includes('view')) && 
+        (text.includes('K') || text.includes('M') || text.includes('B') || /^\d+/.test(text))) {
       videoData.views = text;
       break;
     }
   }
   
-  // Extract duration
-  const durationElement = element.querySelector('.ytd-thumbnail-overlay-time-status-renderer, [class*="duration"]');
-  if (durationElement) {
-    videoData.duration = durationElement.textContent?.trim();
+  // Extract duration from thumbnail overlay
+  const durationSelectors = [
+    '.ytd-thumbnail-overlay-time-status-renderer',
+    '[class*="duration"]',
+    '.badge-style-type-simple[aria-label*=":"]',
+    'span[aria-label*=":"]'
+  ];
+  
+  for (const selector of durationSelectors) {
+    const durationElement = element.querySelector(selector);
+    if (durationElement) {
+      const duration = durationElement.textContent?.trim() || durationElement.getAttribute('aria-label');
+      if (duration && duration.match(/\d+:\d+/)) {
+        videoData.duration = duration;
+        break;
+      }
+    }
   }
   
   // Extract published time
-  const timeElement = element.querySelector('[class*="published"] span, .metadata span[aria-label*="ago"]');
-  if (timeElement) {
-    videoData.publishedTime = timeElement.textContent?.trim();
+  const timeSelectors = [
+    '[class*="published"] span',
+    '.metadata span[aria-label*="ago"]',
+    'span[aria-label*="ago"]'
+  ];
+  
+  for (const selector of timeSelectors) {
+    const timeElement = element.querySelector(selector);
+    if (timeElement) {
+      const timeText = timeElement.textContent?.trim() || timeElement.getAttribute('aria-label');
+      if (timeText && timeText.includes('ago')) {
+        videoData.publishedTime = timeText;
+        break;
+      }
+    }
   }
   
   return videoData;
@@ -619,16 +672,21 @@ function injectCraigslistLayout(videos) {
   
   // Build the HTML content
   const videoListings = videos.length > 0 
-    ? videos.map(video => `
+    ? videos.map((video, index) => `
         <div class="video-item">
           <div class="video-title">
             <a href="${video.url || '#'}" class="video-link" target="_parent">
-              ${video.title}
+              ${video.title || `Video ${index + 1}`}
             </a>
           </div>
-          ${video.channel || video.duration || video.views ? `
+          ${video.channel || video.duration || video.views || video.publishedTime ? `
             <div class="video-meta">
-              ${[video.channel, video.duration, video.views].filter(v => v).join(' • ')}
+              ${[
+                video.channel ? `by ${video.channel}` : null,
+                video.duration, 
+                video.views,
+                video.publishedTime
+              ].filter(v => v).join(' • ')}
             </div>
           ` : ''}
         </div>
